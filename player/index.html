@@ -1,0 +1,1030 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hacker's Unity - Official Promo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+    rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #000;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      overflow: hidden;
+    }
+
+    #stage-container {
+      position: relative;
+      width: 1280px;
+      height: 720px;
+      box-shadow: 0 30px 90px rgba(0, 0, 0, 0.9);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 1280px;
+      height: 720px;
+    }
+
+    #controls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(16px);
+      padding: 10px 24px;
+      border-radius: 30px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      z-index: 10;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    #stage-container:hover #controls {
+      opacity: 1;
+    }
+
+    button {
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+      font-family: 'Inter', sans-serif;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    #scrubber {
+      width: 340px;
+      accent-color: #4ade80;
+      cursor: pointer;
+    }
+
+    #time-display {
+      font-family: 'Space Grotesk', monospace;
+      font-size: 13px;
+      color: rgba(255, 255, 255, 0.7);
+      min-width: 80px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="stage-container">
+    <canvas id="stage" width="1280" height="720"></canvas>
+    <div id="controls">
+      <button id="btn-play">▶ Play</button>
+      <input type="range" id="scrubber" min="0" max="30.25" step="0.033" value="0">
+      <span id="time-display">00:00.0</span>
+      <button id="btn-restart">↺</button>
+    </div>
+  </div>
+
+  <audio id="bg-audio" src="./audio.aac" preload="auto"></audio>
+
+  <script>
+    const canvas = document.getElementById('stage');
+    const ctx = canvas.getContext('2d');
+    const W = 1280;
+    const H = 720;
+    const TOTAL_DURATION = 30.25;
+
+    // Load assets
+    const logoImg = new Image();
+    logoImg.src = './logo.png';
+    const emblemImg = new Image();
+    emblemImg.src = './emblem.png';
+
+    let loadedCount = 0;
+    window.assetsReady = false;
+    const onAssetLoad = () => {
+      loadedCount++;
+      if (loadedCount >= 2) {
+        window.assetsReady = true;
+        window.renderFrame(0);
+      }
+    };
+    logoImg.onload = onAssetLoad;
+    emblemImg.onload = onAssetLoad;
+
+    // ========== EASING ==========
+    function easeOutExpo(x) { return x === 1 ? 1 : 1 - Math.pow(2, -10 * x); }
+    function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+    function easeOutQuart(x) { return 1 - Math.pow(1 - x, 4); }
+    function easeInOutCubic(x) { return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; }
+    function easeOutBack(x) { const c1 = 1.70158; const c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); }
+    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+    function lerp(a, b, t) { return a + (b - a) * t; }
+    function smoothstep(a, b, x) { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
+
+    // ========== COLOR PALETTES ==========
+    // Each scene has a carefully crafted background gradient palette
+    // Inspired by the reference: organic flowing gradients, not harsh tech
+
+    function hexToRgb(hex) {
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return [r, g, b];
+    }
+    function lerpColor(c1, c2, t) {
+      return [lerp(c1[0], c2[0], t), lerp(c1[1], c2[1], t), lerp(c1[2], c2[2], t)];
+    }
+    function rgbStr(c, a) { return `rgba(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])},${a || 1})`; }
+
+    // Scene background configs: each scene defines a background mood
+    const sceneBackgrounds = [
+      // Scene 0 (0-2s): Dark with subtle teal accent (like ref frame 1 "NEW")
+      { bg: '#0a1014', orb1: [0, 80, 80], orb2: [20, 60, 50], textColor: 'light' },
+      // Scene 1 (2-4s): Slightly brighter dark teal
+      { bg: '#0c1418', orb1: [0, 100, 100], orb2: [30, 70, 60], textColor: 'light' },
+      // Scene 2 (4-5s): Bright mint/green glow (like ref "Smart Contracts" frame)
+      { bg: '#0e2a2a', orb1: [100, 220, 180], orb2: [200, 240, 220], textColor: 'dark' },
+      // Scene 3 (5-6s): Warm mint to teal 
+      { bg: '#0a2420', orb1: [60, 180, 140], orb2: [180, 220, 200], textColor: 'dark' },
+      // Scene 4 (6-7.6s): Deep dark emerald (like ref "Python" frame)
+      { bg: '#081c18', orb1: [0, 120, 90], orb2: [40, 100, 80], textColor: 'light' },
+      // Scene 5 (7.6-10.2s): Rich deep teal
+      { bg: '#061816', orb1: [0, 140, 120], orb2: [0, 90, 80], textColor: 'light' },
+      // Scene 6 (10.2-12.2s): Dark with cyan accent
+      { bg: '#071014', orb1: [0, 160, 160], orb2: [0, 80, 100], textColor: 'light' },
+      // Scene 7 (12.2-14.6s): Dark warm teal-orange hint
+      { bg: '#0f1610', orb1: [40, 130, 80], orb2: [120, 80, 20], textColor: 'light' },
+      // Scene 8 (14.6-16.2s): Deep blue-teal
+      { bg: '#060e14', orb1: [0, 100, 140], orb2: [0, 60, 100], textColor: 'light' },
+      // Scene 9 (16.2-18.4s): Soft teal-cyan
+      { bg: '#081816', orb1: [0, 140, 130], orb2: [30, 100, 90], textColor: 'light' },
+      // Scene 10 (18.4-22.4s): Bright emerald bloom (climax - like ref "Build Real-World")
+      { bg: '#0a1e1a', orb1: [0, 180, 140], orb2: [60, 200, 160], textColor: 'light' },
+      // Scene 11 (22.4-24s): Dark dramatic
+      { bg: '#08100e', orb1: [0, 140, 100], orb2: [0, 80, 70], textColor: 'light' },
+      // Scene 12 (24-25.4s): Orange-warm accent
+      { bg: '#141008', orb1: [140, 80, 0], orb2: [100, 60, 10], textColor: 'light' },
+      // Scene 13 (25.4-26.4s): Teal-blue
+      { bg: '#081418', orb1: [0, 120, 160], orb2: [0, 80, 120], textColor: 'light' },
+      // Scene 14 (26.4-27.6s): Bright mint (celebration)
+      { bg: '#0c2820', orb1: [80, 200, 160], orb2: [160, 220, 200], textColor: 'dark' },
+      // Scene 15 (27.6-28.8s): Deep rich dark
+      { bg: '#0a0e12', orb1: [0, 100, 120], orb2: [60, 80, 40], textColor: 'light' },
+      // Scene 16 (28.8-30.3s): Outro — dark dramatic with accent
+      { bg: '#060a0e', orb1: [0, 120, 140], orb2: [80, 60, 20], textColor: 'light' },
+    ];
+
+    // Scene timeline boundaries
+    const sceneTimes = [0, 2.05, 4.0, 5.0, 6.0, 7.6, 10.2, 12.2, 14.6, 16.2, 18.4, 22.4, 24.0, 25.4, 26.4, 27.6, 28.8, 30.35];
+
+    function getSceneIndex(t) {
+      for (let i = sceneTimes.length - 2; i >= 0; i--) {
+        if (t >= sceneTimes[i]) return i;
+      }
+      return 0;
+    }
+
+    // Flash beats synchronized to music
+    const flashBeats = [0.0, 2.05, 4.0, 5.0, 6.0, 7.6, 10.2, 12.2, 14.6, 16.2, 18.4, 22.4, 24.0, 25.4, 26.4, 27.6, 28.8];
+
+    function getFlashIntensity(t) {
+      let mx = 0;
+      for (const beat of flashBeats) {
+        if (t >= beat && t <= beat + 0.35) {
+          const dt = t - beat;
+          mx = Math.max(mx, Math.exp(-dt * 16));
+        }
+      }
+      return mx;
+    }
+
+    // ========== BACKGROUND RENDERER ==========
+    // Organic flowing gradients like the reference video
+    function drawBackground(t, flash) {
+      const si = getSceneIndex(t);
+      const sceneStart = sceneTimes[si];
+      const sceneEnd = sceneTimes[si + 1] || TOTAL_DURATION;
+      const sceneDur = sceneEnd - sceneStart;
+      const localT = t - sceneStart;
+      const sceneProgress = localT / sceneDur;
+
+      const cur = sceneBackgrounds[si];
+      const next = sceneBackgrounds[Math.min(si + 1, sceneBackgrounds.length - 1)];
+
+      // Cross-fade between scene backgrounds in the last 0.3s
+      const crossFadeStart = sceneDur - 0.3;
+      const crossFade = sceneProgress > (crossFadeStart / sceneDur)
+        ? smoothstep(crossFadeStart, sceneDur, localT)
+        : 0;
+
+      const bgCol1 = hexToRgb(cur.bg);
+      const bgCol2 = hexToRgb(next.bg);
+      const bgFinal = lerpColor(bgCol1, bgCol2, crossFade);
+
+      const orb1 = lerpColor(cur.orb1, next.orb1, crossFade);
+      const orb2 = lerpColor(cur.orb2, next.orb2, crossFade);
+
+      // Fill base background
+      ctx.fillStyle = rgbStr(bgFinal);
+      ctx.fillRect(0, 0, W, H);
+
+      // Organic flowing gradient orbs (like the reference video's smooth mesh)
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+
+      // Primary orb — slow organic drift
+      const ox1 = W * 0.35 + Math.sin(t * 0.3 + 1.2) * W * 0.2;
+      const oy1 = H * 0.55 + Math.cos(t * 0.25 + 0.8) * H * 0.2;
+      const or1 = 500 + Math.sin(t * 0.4) * 80;
+      const g1 = ctx.createRadialGradient(ox1, oy1, 0, ox1, oy1, or1);
+      g1.addColorStop(0, rgbStr(orb1, 0.5));
+      g1.addColorStop(0.35, rgbStr(orb1, 0.25));
+      g1.addColorStop(0.7, rgbStr(orb1, 0.06));
+      g1.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g1;
+      ctx.fillRect(0, 0, W, H);
+
+      // Secondary orb — counter-drift
+      const ox2 = W * 0.7 + Math.cos(t * 0.28 + 2.5) * W * 0.18;
+      const oy2 = H * 0.35 + Math.sin(t * 0.22 + 1.5) * H * 0.18;
+      const or2 = 450 + Math.cos(t * 0.35) * 70;
+      const g2 = ctx.createRadialGradient(ox2, oy2, 0, ox2, oy2, or2);
+      g2.addColorStop(0, rgbStr(orb2, 0.4));
+      g2.addColorStop(0.35, rgbStr(orb2, 0.18));
+      g2.addColorStop(0.7, rgbStr(orb2, 0.04));
+      g2.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g2;
+      ctx.fillRect(0, 0, W, H);
+
+      // Third accent orb — subtle bottom-right warmth
+      const ox3 = W * 0.85 + Math.sin(t * 0.18) * 80;
+      const oy3 = H * 0.8 + Math.cos(t * 0.15) * 60;
+      const accent3 = lerpColor(orb1, orb2, 0.5 + 0.5 * Math.sin(t * 0.2));
+      const g3 = ctx.createRadialGradient(ox3, oy3, 0, ox3, oy3, 380);
+      g3.addColorStop(0, rgbStr(accent3, 0.25));
+      g3.addColorStop(0.5, rgbStr(accent3, 0.08));
+      g3.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g3;
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.restore();
+
+      // Soft vignette
+      const vig = ctx.createRadialGradient(W / 2, H / 2, H * 0.35, W / 2, H / 2, H * 0.95);
+      vig.addColorStop(0, 'rgba(0,0,0,0)');
+      vig.addColorStop(0.6, 'rgba(0,0,0,0.15)');
+      vig.addColorStop(1, 'rgba(0,0,0,0.55)');
+      ctx.fillStyle = vig;
+      ctx.fillRect(0, 0, W, H);
+
+      // Subtle noise texture overlay for organic feel
+      if (typeof drawNoise === 'function') drawNoise(t);
+
+      // Beat flash — white bloom from center
+      if (flash > 0.01) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        const flashGrad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * 0.6);
+        flashGrad.addColorStop(0, `rgba(255,255,255,${flash * 0.6})`);
+        flashGrad.addColorStop(0.3, `rgba(200,240,230,${flash * 0.3})`);
+        flashGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = flashGrad;
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+      }
+    }
+
+    // ========== TEXT RENDERER ==========
+    // Clean, Apple-style text with motion blur reveal
+    function drawText(text, x, y, opt) {
+      opt = opt || {};
+      const fontSize = opt.fontSize || 72;
+      const fontWeight = opt.fontWeight || '800';
+      const color = opt.color || '#eaf6f0';
+      const gradient = opt.gradient || null;
+      const opacity = opt.opacity !== undefined ? opt.opacity : 1;
+      const scale = opt.scale !== undefined ? opt.scale : 1;
+      const blur = opt.blur || 0;
+      const yOffset = opt.yOffset || 0;
+      const letterSpacing = opt.letterSpacing || 0;
+
+      if (opacity <= 0.001) return;
+
+      ctx.save();
+      ctx.globalAlpha = clamp(opacity, 0, 1);
+      ctx.translate(x, y + yOffset);
+      ctx.scale(scale, scale);
+
+      if (blur > 0.5) {
+        ctx.filter = `blur(${blur}px)`;
+      }
+
+      ctx.font = `${fontWeight} ${fontSize}px "Inter", -apple-system, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      if (letterSpacing) ctx.letterSpacing = letterSpacing + 'px';
+
+      // Subtle text shadow for depth (not harsh glow)
+      ctx.shadowColor = 'rgba(0,0,0,0.3)';
+      ctx.shadowBlur = 20;
+      ctx.shadowOffsetY = 4;
+
+      if (gradient) {
+        ctx.fillStyle = gradient;
+      } else {
+        ctx.fillStyle = color;
+      }
+
+      ctx.fillText(text, 0, 0);
+
+      ctx.restore();
+    }
+
+    // Subtext renderer
+    function drawSubtext(text, x, y, opt) {
+      opt = opt || {};
+      const fontSize = opt.fontSize || 20;
+      const color = opt.color || 'rgba(180,220,200,0.8)';
+      const opacity = opt.opacity !== undefined ? opt.opacity : 1;
+      const blur = opt.blur || 0;
+      const yOffset = opt.yOffset || 0;
+
+      if (opacity <= 0.001) return;
+
+      ctx.save();
+      ctx.globalAlpha = clamp(opacity, 0, 1);
+      ctx.translate(x, y + yOffset);
+
+      if (blur > 0.5) ctx.filter = `blur(${blur}px)`;
+
+      ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.letterSpacing = '3px';
+      ctx.fillStyle = color;
+      ctx.shadowColor = 'rgba(0,0,0,0.2)';
+      ctx.shadowBlur = 10;
+      ctx.fillText(text, 0, 0);
+
+      ctx.restore();
+    }
+
+    // ========== TEXT ANIMATION HELPERS ==========
+    // Reference video style: text flies in from blur, snaps into focus, then slides/fades out
+    function getTextAnim(localT, duration, opt) {
+      opt = opt || {};
+      const enterDur = opt.enterDur || 0.35;
+      const exitStart = duration - (opt.exitDur || 0.25);
+
+      // Enter: blur → sharp, scale up, slide up, fade in
+      const enterP = clamp(localT / enterDur, 0, 1);
+      const enterEased = easeOutQuart(enterP);
+
+      // Exit: fade out, slight slide up
+      const exitP = clamp((localT - exitStart) / (duration - exitStart), 0, 1);
+      const exitEased = easeOutCubic(exitP);
+
+      return {
+        opacity: enterEased * (1 - exitEased),
+        scale: lerp(1.08, 1.0, enterEased),
+        blur: lerp(18, 0, enterEased),
+        yOffset: lerp(20, 0, enterEased) + lerp(0, -15, exitEased),
+      };
+    }
+
+    // For "character-by-character" staggered reveal (like ref "NEW" being revealed letter by letter)
+    function getCharAnim(localT, charIndex, totalChars, duration) {
+      const stagger = 0.06;
+      const charStart = charIndex * stagger;
+      const charT = clamp((localT - charStart) / 0.3, 0, 1);
+      const eased = easeOutQuart(charT);
+
+      const exitStart = duration - 0.25;
+      const exitP = clamp((localT - exitStart) / 0.25, 0, 1);
+
+      return {
+        opacity: eased * (1 - exitP),
+        blur: lerp(12, 0, eased),
+        yOffset: lerp(30, 0, eased),
+      };
+    }
+
+    // ========== MULTI-COLOR TEXT ==========
+    function drawMultiColorText(parts, x, y, opt) {
+      opt = opt || {};
+      const fontSize = opt.fontSize || 72;
+      const fontWeight = opt.fontWeight || '800';
+      const opacity = opt.opacity !== undefined ? opt.opacity : 1;
+      const scale = opt.scale !== undefined ? opt.scale : 1;
+      const blur = opt.blur || 0;
+      const yOffset = opt.yOffset || 0;
+
+      if (opacity <= 0.001) return;
+
+      ctx.save();
+      ctx.globalAlpha = clamp(opacity, 0, 1);
+      ctx.translate(x, y + yOffset);
+      ctx.scale(scale, scale);
+      if (blur > 0.5) ctx.filter = `blur(${blur}px)`;
+
+      ctx.font = `${fontWeight} ${fontSize}px "Inter", -apple-system, sans-serif`;
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(0,0,0,0.3)';
+      ctx.shadowBlur = 15;
+
+      // Measure total width
+      let totalWidth = 0;
+      for (const p of parts) totalWidth += ctx.measureText(p.text).width;
+
+      let cx = -totalWidth / 2;
+      for (const p of parts) {
+        ctx.fillStyle = p.color || '#eaf6f0';
+        ctx.fillText(p.text, cx, 0);
+        cx += ctx.measureText(p.text).width;
+      }
+
+      ctx.restore();
+    }
+
+    // ========== PILL BADGE (refined) ==========
+    function drawPill(text, x, y, opt) {
+      opt = opt || {};
+      const fontSize = opt.fontSize || 18;
+      const borderColor = opt.borderColor || 'rgba(100,200,180,0.4)';
+      const opacity = opt.opacity !== undefined ? opt.opacity : 1;
+      const scale = opt.scale !== undefined ? opt.scale : 1;
+      const blur = opt.blur || 0;
+
+      if (opacity <= 0.001) return;
+
+      ctx.save();
+      ctx.globalAlpha = clamp(opacity, 0, 1);
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
+      if (blur > 0.5) ctx.filter = `blur(${blur}px)`;
+
+      ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
+      ctx.letterSpacing = '1px';
+      const tw = ctx.measureText(text).width;
+      const px = 22, py = 10;
+      const bw = tw + px * 2;
+      const bh = fontSize + py * 2;
+
+      // Frosted glass background
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath();
+      ctx.roundRect(-bw / 2, -bh / 2, bw, bh, bh / 2);
+      ctx.fill();
+
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = 'rgba(220,240,230,0.9)';
+      ctx.fillText(text, 0, 0);
+
+      ctx.restore();
+    }
+
+    // ========== MAIN RENDER ==========
+    window.renderFrame = function (t) {
+      const flash = getFlashIntensity(t);
+      drawBackground(t, flash);
+
+      // ==========================================
+      // SCENE 0: 0.00s - 2.05s — "COMMUNITY" → "HACKER'S UNITY"
+      // Inspired by ref: Big bold "NEW" text appearing with motion blur
+      // ==========================================
+      if (t >= 0 && t < 2.05) {
+        if (t < 0.8) {
+          // "COMMUNITY" — big, bold, center, blur reveal
+          const a = getTextAnim(t, 0.8, { enterDur: 0.4, exitDur: 0.15 });
+          drawText('COMMUNITY', W / 2, H / 2, {
+            fontSize: 110,
+            fontWeight: '900',
+            color: '#e8f4ec',
+            ...a
+          });
+        } else {
+          // "HACKER'S UNITY" with gradient
+          const lt = t - 0.8;
+          const a = getTextAnim(lt, 1.25, { enterDur: 0.35, exitDur: 0.15 });
+
+          const grad = ctx.createLinearGradient(W / 2 - 300, H / 2, W / 2 + 300, H / 2);
+          grad.addColorStop(0, '#a8edce');
+          grad.addColorStop(0.5, '#e0f7e8');
+          grad.addColorStop(1, '#f0c860');
+
+          drawText("HACKER'S UNITY", W / 2, H / 2 - 20, {
+            fontSize: 96,
+            fontWeight: '900',
+            gradient: grad,
+            ...a
+          });
+
+          // Subtext
+          const subA = getTextAnim(lt - 0.15, 1.1, { enterDur: 0.3, exitDur: 0.1 });
+          drawSubtext("INDIA'S FASTEST GROWING DEVELOPER COMMUNITY", W / 2, H / 2 + 60, {
+            fontSize: 18,
+            color: 'rgba(180,230,200,0.7)',
+            ...subA
+          });
+        }
+      }
+
+      // ==========================================
+      // SCENE 1: 2.05s - 4.00s — Emblem + "Build with Hacker's Unity"
+      // ==========================================
+      else if (t >= 2.05 && t < 4.0) {
+        const lt = t - 2.05;
+        const dur = 1.95;
+        const a = getTextAnim(lt, dur, { enterDur: 0.4, exitDur: 0.2 });
+
+        // Emblem
+        if (window.assetsReady) {
+          ctx.save();
+          ctx.translate(W / 2, H / 2 - 80);
+          const embScale = lerp(0.5, 0.55, easeOutQuart(clamp(lt / 0.5, 0, 1)));
+          ctx.scale(embScale, embScale);
+          ctx.globalAlpha = a.opacity;
+          if (a.blur > 0.5) ctx.filter = `blur(${a.blur * 0.5}px)`;
+          ctx.drawImage(emblemImg, -emblemImg.width / 2, -emblemImg.height / 2);
+          ctx.restore();
+        }
+
+        drawMultiColorText([
+          { text: 'Build with ', color: '#e0eee8' },
+          { text: "Hacker's ", color: '#7dd3a8' },
+          { text: 'Unity', color: '#f0c050' },
+        ], W / 2, H / 2 + 90, {
+          fontSize: 58,
+          fontWeight: '800',
+          ...a
+        });
+      }
+
+      // ==========================================
+      // SCENE 2: 4.00s - 5.00s — "Real Code."
+      // Bright mint background (like ref "Smart Contracts" frame)
+      // ==========================================
+      else if (t >= 4.0 && t < 5.0) {
+        const lt = t - 4.0;
+        const a = getTextAnim(lt, 1.0, { enterDur: 0.3, exitDur: 0.15 });
+
+        drawText('Real Code.', W / 2, H / 2, {
+          fontSize: 100,
+          fontWeight: '900',
+          color: '#0a2e24',
+          ...a
+        });
+      }
+
+      // ==========================================
+      // SCENE 3: 5.00s - 6.00s — "Real Impact."
+      // ==========================================
+      else if (t >= 5.0 && t < 6.0) {
+        const lt = t - 5.0;
+        const a = getTextAnim(lt, 1.0, { enterDur: 0.3, exitDur: 0.15 });
+
+        drawText('Real Impact.', W / 2, H / 2, {
+          fontSize: 100,
+          fontWeight: '900',
+          color: '#0c2a20',
+          ...a
+        });
+      }
+
+      // ==========================================
+      // SCENE 4: 6.00s - 7.60s — "Master Modern Tech"
+      // Dark background, light text (like ref "Python" frame)
+      // ==========================================
+      else if (t >= 6.0 && t < 7.6) {
+        const lt = t - 6.0;
+        const dur = 1.6;
+        const a = getTextAnim(lt, dur, { enterDur: 0.35, exitDur: 0.2 });
+
+        drawText('Master Modern Tech', W / 2, H / 2 - 10, {
+          fontSize: 82,
+          fontWeight: '900',
+          color: '#e0f0e8',
+          ...a
+        });
+
+        const subA = getTextAnim(lt - 0.12, dur - 0.12, { enterDur: 0.3, exitDur: 0.15 });
+        drawSubtext('HANDS-ON  •  INDUSTRY GRADE  •  ACCELERATED', W / 2, H / 2 + 55, {
+          fontSize: 17,
+          color: 'rgba(120,200,170,0.75)',
+          ...subA
+        });
+      }
+
+      // ==========================================
+      // SCENE 5: 7.60s - 10.20s — "Learn Web3 & AI"
+      // ==========================================
+      else if (t >= 7.6 && t < 10.2) {
+        const lt = t - 7.6;
+        const dur = 2.6;
+        const a = getTextAnim(lt, dur, { enterDur: 0.4, exitDur: 0.2 });
+
+        drawMultiColorText([
+          { text: 'Learn ', color: '#e0f0e8' },
+          { text: 'Web3 & AI', color: '#6dd8a0' },
+        ], W / 2, H / 2 - 15, {
+          fontSize: 88,
+          fontWeight: '900',
+          ...a
+        });
+
+        // Pills stagger in
+        const p1A = getTextAnim(lt - 0.2, dur - 0.2, { enterDur: 0.35, exitDur: 0.15 });
+        const p2A = getTextAnim(lt - 0.35, dur - 0.35, { enterDur: 0.35, exitDur: 0.15 });
+        drawPill('SMART CONTRACTS', W / 2 - 150, H / 2 + 65, { ...p1A, borderColor: 'rgba(100,210,170,0.4)' });
+        drawPill('NEURAL NETWORKS', W / 2 + 150, H / 2 + 65, { ...p2A, borderColor: 'rgba(200,180,80,0.4)' });
+      }
+
+      // ==========================================
+      // SCENE 6: 10.20s - 12.20s — "Build Full-Stack & Cloud"
+      // ==========================================
+      else if (t >= 10.2 && t < 12.2) {
+        const lt = t - 10.2;
+        const dur = 2.0;
+        const a = getTextAnim(lt, dur, { enterDur: 0.4, exitDur: 0.2 });
+
+        drawMultiColorText([
+          { text: 'Build ', color: '#e0f0e8' },
+          { text: 'Full-Stack & Cloud', color: '#60d0e0' },
+        ], W / 2, H / 2 - 15, {
+          fontSize: 80,
+          fontWeight: '900',
+          ...a
+        });
+
+        const pA = getTextAnim(lt - 0.25, dur - 0.25, { enterDur: 0.35, exitDur: 0.15 });
+        drawPill('REACT  •  NEXT.JS  •  DOCKER  •  DEVOPS', W / 2, H / 2 + 65, { ...pA, borderColor: 'rgba(80,200,220,0.4)' });
+      }
+
+      // ==========================================
+      // SCENE 7: 12.20s - 14.60s — "National Hackathons"
+      // ==========================================
+      else if (t >= 12.2 && t < 14.6) {
+        const lt = t - 12.2;
+        const dur = 2.4;
+        const a = getTextAnim(lt, dur, { enterDur: 0.4, exitDur: 0.2 });
+
+        const grad = ctx.createLinearGradient(W / 2 - 280, H / 2, W / 2 + 280, H / 2);
+        grad.addColorStop(0, '#e0f0e8');
+        grad.addColorStop(0.5, '#f0c860');
+        grad.addColorStop(1, '#e88030');
+
+        drawText('National Hackathons', W / 2, H / 2 - 25, {
+          fontSize: 82,
+          fontWeight: '900',
+          gradient: grad,
+          ...a
+        });
+
+        // Staggered event pills
+        const p1 = getTextAnim(lt - 0.25, dur - 0.25, { enterDur: 0.3, exitDur: 0.15 });
+        const p2 = getTextAnim(lt - 0.4, dur - 0.4, { enterDur: 0.3, exitDur: 0.15 });
+        const p3 = getTextAnim(lt - 0.55, dur - 0.55, { enterDur: 0.3, exitDur: 0.15 });
+
+        drawPill('⚡ HACKSTORM', W / 2 - 250, H / 2 + 55, { ...p1, borderColor: 'rgba(100,200,170,0.4)' });
+        drawPill('🔥 WCHL 2025', W / 2, H / 2 + 55, { ...p2, borderColor: 'rgba(240,180,60,0.4)' });
+        drawPill('🛡️ CODEWARS', W / 2 + 250, H / 2 + 55, { ...p3, borderColor: 'rgba(100,200,170,0.4)' });
+      }
+
+      // ==========================================
+      // SCENE 8: 14.60s - 16.20s — "Industry Mentorship"
+      // ==========================================
+      else if (t >= 14.6 && t < 16.2) {
+        const lt = t - 14.6;
+        const dur = 1.6;
+        const a = getTextAnim(lt, dur, { enterDur: 0.35, exitDur: 0.2 });
+
+        drawText('Industry Mentorship', W / 2, H / 2 - 10, {
+          fontSize: 84,
+          fontWeight: '900',
+          color: '#e0f0e8',
+          ...a
+        });
+
+        const subA = getTextAnim(lt - 0.12, dur - 0.12, { enterDur: 0.3, exitDur: 0.15 });
+        drawSubtext('LEARN DIRECTLY FROM SENIOR TECH ENGINEERS', W / 2, H / 2 + 55, {
+          fontSize: 17,
+          color: 'rgba(100,190,220,0.8)',
+          ...subA
+        });
+      }
+
+      // ==========================================
+      // SCENE 9: 16.20s - 18.40s — "Industry Insider Podcasts"
+      // ==========================================
+      else if (t >= 16.2 && t < 18.4) {
+        const lt = t - 16.2;
+        const dur = 2.2;
+        const a = getTextAnim(lt, dur, { enterDur: 0.4, exitDur: 0.2 });
+
+        const grad = ctx.createLinearGradient(W / 2 - 300, H / 2, W / 2 + 300, H / 2);
+        grad.addColorStop(0, '#6dd8b0');
+        grad.addColorStop(0.5, '#e0f0e8');
+        grad.addColorStop(1, '#f0c860');
+
+        drawText('Industry Insider Podcasts', W / 2, H / 2 - 25, {
+          fontSize: 72,
+          fontWeight: '900',
+          gradient: grad,
+          ...a
+        });
+
+        const p1 = getTextAnim(lt - 0.2, dur - 0.2, { enterDur: 0.3, exitDur: 0.15 });
+        const p2 = getTextAnim(lt - 0.35, dur - 0.35, { enterDur: 0.3, exitDur: 0.15 });
+        const p3 = getTextAnim(lt - 0.5, dur - 0.5, { enterDur: 0.3, exitDur: 0.15 });
+
+        drawPill('AMAZON', W / 2 - 210, H / 2 + 55, { ...p1, borderColor: 'rgba(240,180,60,0.4)' });
+        drawPill('MICROSOFT', W / 2, H / 2 + 55, { ...p2, borderColor: 'rgba(80,180,220,0.4)' });
+        drawPill('TCS & UNICORNS', W / 2 + 210, H / 2 + 55, { ...p3, borderColor: 'rgba(100,200,170,0.4)' });
+      }
+
+      // ==========================================
+      // SCENE 10: 18.40s - 22.40s — "Build Real-World Products & dApps" (CLIMAX)
+      // ==========================================
+      else if (t >= 18.4 && t < 22.4) {
+        const lt = t - 18.4;
+        const dur = 4.0;
+        const a = getTextAnim(lt, dur, { enterDur: 0.45, exitDur: 0.25 });
+
+        drawText('Build Real-World', W / 2, H / 2 - 40, {
+          fontSize: 86,
+          fontWeight: '900',
+          color: '#e0f0e8',
+          ...a
+        });
+
+        const grad = ctx.createLinearGradient(W / 2 - 280, H / 2, W / 2 + 280, H / 2);
+        grad.addColorStop(0, '#6dd8a0');
+        grad.addColorStop(0.5, '#50c8e0');
+        grad.addColorStop(1, '#f0c860');
+
+        const a2 = getTextAnim(lt - 0.1, dur - 0.1, { enterDur: 0.45, exitDur: 0.25 });
+        drawText('Products & dApps', W / 2, H / 2 + 48, {
+          fontSize: 86,
+          fontWeight: '900',
+          gradient: grad,
+          ...a2
+        });
+      }
+
+      // ==========================================
+      // SCENE 11: 22.40s - 24.00s — "50,000+"
+      // ==========================================
+      else if (t >= 22.4 && t < 24.0) {
+        const lt = t - 22.4;
+        const dur = 1.6;
+        const a = getTextAnim(lt, dur, { enterDur: 0.3, exitDur: 0.15 });
+
+        const grad = ctx.createLinearGradient(W / 2 - 200, H / 2, W / 2 + 200, H / 2);
+        grad.addColorStop(0, '#e0f0e8');
+        grad.addColorStop(0.4, '#6dd8b0');
+        grad.addColorStop(1, '#40c8a0');
+
+        drawText('50,000+', W / 2, H / 2 - 30, {
+          fontSize: 120,
+          fontWeight: '900',
+          gradient: grad,
+          ...a
+        });
+
+        const subA = getTextAnim(lt - 0.1, dur - 0.1, { enterDur: 0.3, exitDur: 0.12 });
+        drawSubtext('ACTIVE DEVELOPERS & BUILDERS', W / 2, H / 2 + 55, {
+          fontSize: 22,
+          color: 'rgba(160,220,200,0.8)',
+          ...subA
+        });
+      }
+
+      // ==========================================
+      // SCENE 12: 24.00s - 25.40s — "100+ Hackathons"
+      // ==========================================
+      else if (t >= 24.0 && t < 25.4) {
+        const lt = t - 24.0;
+        const dur = 1.4;
+        const a = getTextAnim(lt, dur, { enterDur: 0.3, exitDur: 0.15 });
+
+        const grad = ctx.createLinearGradient(W / 2 - 180, H / 2, W / 2 + 180, H / 2);
+        grad.addColorStop(0, '#f0e0c0');
+        grad.addColorStop(0.5, '#f0c040');
+        grad.addColorStop(1, '#e08020');
+
+        drawText('100+', W / 2, H / 2 - 30, {
+          fontSize: 120,
+          fontWeight: '900',
+          gradient: grad,
+          ...a
+        });
+
+        const subA = getTextAnim(lt - 0.1, dur - 0.1, { enterDur: 0.3, exitDur: 0.12 });
+        drawSubtext('HACKATHONS & COMMUNITY EVENTS', W / 2, H / 2 + 55, {
+          fontSize: 22,
+          color: 'rgba(220,190,130,0.8)',
+          ...subA
+        });
+      }
+
+      // ==========================================
+      // SCENE 13: 25.40s - 26.40s — "Pan-India Network"
+      // ==========================================
+      else if (t >= 25.4 && t < 26.4) {
+        const lt = t - 25.4;
+        const dur = 1.0;
+        const a = getTextAnim(lt, dur, { enterDur: 0.3, exitDur: 0.15 });
+
+        drawText('Pan-India Network', W / 2, H / 2 - 10, {
+          fontSize: 86,
+          fontWeight: '900',
+          color: '#e0f0e8',
+          ...a
+        });
+
+        const subA = getTextAnim(lt - 0.1, dur - 0.1, { enterDur: 0.3, exitDur: 0.12 });
+        drawSubtext('PARTNERED WITH 150+ COLLEGES & TECH CLUBS', W / 2, H / 2 + 55, {
+          fontSize: 17,
+          color: 'rgba(100,190,220,0.8)',
+          ...subA
+        });
+      }
+
+      // ==========================================
+      // SCENE 14: 26.40s - 27.60s — "100% Free"
+      // Bright mint celebration (like ref bright frames)
+      // ==========================================
+      else if (t >= 26.4 && t < 27.6) {
+        const lt = t - 26.4;
+        const dur = 1.2;
+        const a = getTextAnim(lt, dur, { enterDur: 0.3, exitDur: 0.15 });
+
+        const grad = ctx.createLinearGradient(W / 2 - 250, H / 2, W / 2 + 250, H / 2);
+        grad.addColorStop(0, '#0c3828');
+        grad.addColorStop(0.5, '#0a4030');
+        grad.addColorStop(1, '#2a5030');
+
+        drawText('100% Free', W / 2, H / 2 - 30, {
+          fontSize: 110,
+          fontWeight: '900',
+          color: '#0a3020',
+          ...a
+        });
+
+        const subA = getTextAnim(lt - 0.1, dur - 0.1, { enterDur: 0.3, exitDur: 0.12 });
+        drawSubtext('FOR EVERY DEVELOPER  •  ALWAYS FREE', W / 2, H / 2 + 55, {
+          fontSize: 19,
+          color: 'rgba(30,80,60,0.7)',
+          ...subA
+        });
+      }
+
+      // ==========================================
+      // SCENE 15: 27.60s - 28.80s — "Join The Movement"
+      // ==========================================
+      else if (t >= 27.6 && t < 28.8) {
+        const lt = t - 27.6;
+        const dur = 1.2;
+        const a = getTextAnim(lt, dur, { enterDur: 0.35, exitDur: 0.2 });
+
+        drawText('Join The Movement', W / 2, H / 2 - 10, {
+          fontSize: 86,
+          fontWeight: '900',
+          color: '#e0f0e8',
+          ...a
+        });
+
+        const subA = getTextAnim(lt - 0.12, dur - 0.12, { enterDur: 0.3, exitDur: 0.15 });
+        drawSubtext('COLLABORATE  •  BUILD  •  GROW', W / 2, H / 2 + 55, {
+          fontSize: 19,
+          color: 'rgba(200,180,80,0.8)',
+          ...subA
+        });
+      }
+
+      // ==========================================
+      // SCENE 16: 28.80s - END — OUTRO with Logo
+      // ==========================================
+      else if (t >= 28.8) {
+        const lt = t - 28.8;
+        const dur = 1.55;
+        const a = getTextAnim(lt, dur + 1, { enterDur: 0.5, exitDur: 0.01 }); // no exit fade
+
+        // Logo
+        if (window.assetsReady) {
+          ctx.save();
+          ctx.translate(W / 2, H / 2 - 50);
+          const logoScale = lerp(0.55, 0.6, easeOutQuart(clamp(lt / 0.6, 0, 1)));
+          ctx.scale(logoScale, logoScale);
+          ctx.globalAlpha = a.opacity;
+          if (a.blur > 0.5) ctx.filter = `blur(${a.blur * 0.5}px)`;
+          ctx.drawImage(logoImg, -logoImg.width / 2, -logoImg.height / 2);
+          ctx.restore();
+        }
+
+        // Tagline
+        const subA = getTextAnim(lt - 0.2, dur + 0.8, { enterDur: 0.4, exitDur: 0.01 });
+        drawSubtext("UNITING HACKERS  •  BUILDING THE FUTURE", W / 2, H / 2 + 160, {
+          fontSize: 18,
+          color: 'rgba(200,230,220,0.75)',
+          ...subA
+        });
+
+        const sub2A = getTextAnim(lt - 0.35, dur + 0.65, { enterDur: 0.4, exitDur: 0.01 });
+        drawSubtext("hackersunity.com  •  @Hackers_Unity", W / 2, H / 2 + 195, {
+          fontSize: 16,
+          color: 'rgba(100,200,170,0.7)',
+          ...sub2A
+        });
+      }
+    };
+
+    // ========== PLAYER CONTROLS ==========
+    const audio = document.getElementById('bg-audio');
+    const btnPlay = document.getElementById('btn-play');
+    const btnRestart = document.getElementById('btn-restart');
+    const scrubber = document.getElementById('scrubber');
+    const timeDisplay = document.getElementById('time-display');
+
+    let isPlaying = false;
+    let animId = null;
+
+    function formatTime(s) {
+      const mins = Math.floor(s / 60);
+      const secs = (s % 60).toFixed(1);
+      return (mins < 10 ? '0' : '') + mins + ':' + (secs < 10 ? '0' : '') + secs;
+    }
+
+    function tick() {
+      if (!isPlaying) return;
+      const t = audio.currentTime;
+      window.renderFrame(t);
+      scrubber.value = t;
+      timeDisplay.textContent = formatTime(t);
+      if (t >= TOTAL_DURATION || audio.ended) { pause(); return; }
+      animId = requestAnimationFrame(tick);
+    }
+
+    function play() {
+      isPlaying = true;
+      btnPlay.textContent = '❚❚ Pause';
+      audio.play().catch(e => console.log('Audio autoplay prevented:', e));
+      animId = requestAnimationFrame(tick);
+    }
+
+    function pause() {
+      isPlaying = false;
+      btnPlay.textContent = '▶ Play';
+      audio.pause();
+      if (animId) cancelAnimationFrame(animId);
+    }
+
+    btnPlay.addEventListener('click', () => { if (isPlaying) pause(); else play(); });
+    btnRestart.addEventListener('click', () => {
+      audio.currentTime = 0;
+      scrubber.value = 0;
+      window.renderFrame(0);
+      timeDisplay.textContent = formatTime(0);
+      play();
+    });
+    scrubber.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      audio.currentTime = val;
+      window.renderFrame(val);
+      timeDisplay.textContent = formatTime(val);
+    });
+  </script>
+</body>
+
+</html>
